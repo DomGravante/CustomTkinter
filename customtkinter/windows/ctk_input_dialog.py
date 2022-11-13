@@ -42,6 +42,8 @@ class CTkInputDialog:
         self.top.focus_force()
         self.top.grab_set()
 
+        self.top.protocol("WM_DELETE_WINDOW", self.on_closing)
+
         self.top.after(10, self.create_widgets)  # create widgets with slight delay, to avoid white flickering of background
 
     def create_widgets(self):
@@ -95,6 +97,9 @@ class CTkInputDialog:
         self.user_input = self.entry.get()
         self.running = False
 
+    def on_closing(self):
+        self.running = False
+
     def cancel_event(self):
         self.running = False
 
@@ -102,8 +107,12 @@ class CTkInputDialog:
         self.running = True
 
         while self.running:
-            self.top.update()
-            time.sleep(0.01)
+            try:
+                self.top.update()
+            except Exception:
+                return self.user_input
+            finally:
+                time.sleep(0.01)
 
         time.sleep(0.05)
         self.top.destroy()

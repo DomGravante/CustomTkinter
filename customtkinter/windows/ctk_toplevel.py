@@ -47,7 +47,11 @@ class CTkToplevel(tkinter.Toplevel):
         AppearanceModeTracker.add(self.set_appearance_mode, self)
         super().configure(bg=ThemeManager.single_color(self.fg_color, self.appearance_mode))
         super().title("CTkToplevel")
-        # self.geometry(f"{self._current_width}x{self._current_height}")
+
+        self.state_before_windows_set_titlebar_color = None
+        self.windows_set_titlebar_color_called = False  # indicates if windows_set_titlebar_color was called, stays True until revert_withdraw_after_windows_set_titlebar_color is called
+        self.withdraw_called_after_windows_set_titlebar_color = False  # indicates if withdraw() was called after windows_set_titlebar_color
+        self.iconify_called_after_windows_set_titlebar_color = False  # indicates if iconify() was called after windows_set_titlebar_color
 
         if sys.platform.startswith("win"):
             if self.appearance_mode == 1:
@@ -83,19 +87,54 @@ class CTkToplevel(tkinter.Toplevel):
         if self.max_width is not None or self.max_height is not None:
             super().maxsize(self.apply_window_scaling(self.max_width), self.apply_window_scaling(self.max_height))
 
-    def apply_geometry_scaling(self, geometry_string):
-        numbers = list(map(int, re.split(r"[x+]", geometry_string)))  # split geometry string into list of numbers
+    def geometry(self, geometry_string: str = None):
+        if geometry_string is not None:
+            super().geometry(self.apply_geometry_scaling(geometry_string))
 
-        if len(numbers) == 2:
-            return f"{self.apply_window_scaling(numbers[0]):.0f}x" +\
-                   f"{self.apply_window_scaling(numbers[1]):.0f}"
-        elif len(numbers) == 4:
-            return f"{self.apply_window_scaling(numbers[0]):.0f}x" +\
-                   f"{self.apply_window_scaling(numbers[1]):.0f}+" +\
-                   f"{self.apply_window_scaling(numbers[2]):.0f}+" +\
-                   f"{self.apply_window_scaling(numbers[3]):.0f}"
+            # update width and height attributes
+            width, height, x, y = self.parse_geometry_string(geometry_string)
+            if width is not None and height is not None:
+                self.current_width = max(self.min_width, min(width, self.max_width))  # bound value between min and max
+                self.current_height = max(self.min_height, min(height, self.max_height))
         else:
-            return geometry_string
+            return self.reverse_geometry_scaling(super().geometry())
+
+    @staticmethod
+    def parse_geometry_string(geometry_string: str) -> tuple:
+        #                 index:   1                   2           3          4             5       6
+        # regex group structure: ('<width>x<height>', '<width>', '<height>', '+-<x>+-<y>', '-<x>', '-<y>')
+        result = re.search(r"((\d+)x(\d+)){0,1}(\+{0,1}([+-]{0,1}\d+)\+{0,1}([+-]{0,1}\d+)){0,1}", geometry_string)
+
+        width = int(result.group(2)) if result.group(2) is not None else None
+        height = int(result.group(3)) if result.group(3) is not None else None
+        x = int(result.group(5)) if result.group(5) is not None else None
+        y = int(result.group(6)) if result.group(6) is not None else None
+
+        return width, height, x, y
+
+    def apply_geometry_scaling(self, geometry_string: str) -> str:
+        width, height, x, y = self.parse_geometry_string(geometry_string)
+
+        if x is None and y is None:  # no <x> and <y> in geometry_string
+            return f"{round(width * self.window_scaling)}x{round(height * self.window_scaling)}"
+
+        elif width is None and height is None:  # no <width> and <height> in geometry_string
+            return f"+{x}+{y}"
+
+        else:
+            return f"{round(width * self.window_scaling)}x{round(height * self.window_scaling)}+{x}+{y}"
+
+    def reverse_geometry_scaling(self, scaled_geometry_string: str) -> str:
+        width, height, x, y = self.parse_geometry_string(scaled_geometry_string)
+
+        if x is None and y is None:  # no <x> and <y> in geometry_string
+            return f"{round(width / self.window_scaling)}x{round(height / self.window_scaling)}"
+
+        elif width is None and height is None:  # no <width> and <height> in geometry_string
+            return f"+{x}+{y}"
+
+        else:
+            return f"{round(width / self.window_scaling)}x{round(height / self.window_scaling)}+{x}+{y}"
 
     def apply_window_scaling(self, value):
         if isinstance(value, (int, float)):
@@ -103,19 +142,21 @@ class CTkToplevel(tkinter.Toplevel):
         else:
             return value
 
-    def geometry(self, geometry_string):
-        super().geometry(self.apply_geometry_scaling(geometry_string))
-
-        # update width and height attributes
-        numbers = list(map(int, re.split(r"[x+]", geometry_string)))  # split geometry string into list of numbers
-        self.current_width = max(self.min_width, min(numbers[0], self.max_width))  # bound value between min and max
-        self.current_height = max(self.min_height, min(numbers[1], self.max_height))
-
     def destroy(self):
         AppearanceModeTracker.remove(self.set_appearance_mode)
         ScalingTracker.remove_window(self.set_scaling, self)
         self.disable_macos_dark_title_bar()
         super().destroy()
+
+    def withdraw(self):
+        if self.windows_set_titlebar_color_called:
+            self.withdraw_called_after_windows_set_titlebar_color = True
+        super().withdraw()
+
+    def iconify(self):
+        if self.windows_set_titlebar_color_called:
+            self.iconify_called_after_windows_set_titlebar_color = True
+        super().iconify()
 
     def resizable(self, *args, **kwargs):
         super().resizable(*args, **kwargs)
@@ -123,9 +164,9 @@ class CTkToplevel(tkinter.Toplevel):
 
         if sys.platform.startswith("win"):
             if self.appearance_mode == 1:
-                self.windows_set_titlebar_color("dark")
+                self.after(10, lambda: self.windows_set_titlebar_color("dark"))
             else:
-                self.windows_set_titlebar_color("light")
+                self.after(10, lambda: self.windows_set_titlebar_color("light"))
 
     def minsize(self, width=None, height=None):
         self.min_width = width
@@ -208,6 +249,7 @@ class CTkToplevel(tkinter.Toplevel):
 
         if sys.platform.startswith("win") and not Settings.deactivate_windows_window_header_manipulation:
 
+            self.state_before_windows_set_titlebar_color = self.state()
             super().withdraw()  # hide window so that it can be redrawn after the titlebar change so that the color change is visible
             super().update()
 
@@ -235,7 +277,30 @@ class CTkToplevel(tkinter.Toplevel):
             except Exception as err:
                 print(err)
 
-            self.deiconify()
+            self.windows_set_titlebar_color_called = True
+            self.after(5, self.revert_withdraw_after_windows_set_titlebar_color)
+
+    def revert_withdraw_after_windows_set_titlebar_color(self):
+        """ if in a short time (5ms) after """
+        if self.windows_set_titlebar_color_called:
+
+            if self.withdraw_called_after_windows_set_titlebar_color:
+                pass  # leave it withdrawed
+            elif self.iconify_called_after_windows_set_titlebar_color:
+                super().iconify()
+            else:
+                if self.state_before_windows_set_titlebar_color == "normal":
+                    self.deiconify()
+                elif self.state_before_windows_set_titlebar_color == "iconic":
+                    self.iconify()
+                elif self.state_before_windows_set_titlebar_color == "zoomed":
+                    self.state("zoomed")
+                else:
+                    self.state(self.state_before_windows_set_titlebar_color)  # other states
+
+            self.windows_set_titlebar_color_called = False
+            self.withdraw_called_after_windows_set_titlebar_color = False
+            self.iconify_called_after_windows_set_titlebar_color = False
 
     def set_appearance_mode(self, mode_string):
         if mode_string.lower() == "dark":

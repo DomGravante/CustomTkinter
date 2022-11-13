@@ -45,12 +45,15 @@ class AppearanceModeTracker:
                 cls.app_list.append(app)
 
                 if not cls.update_loop_running:
-                    app.after(500, cls.update)
+                    app.after(cls.update_loop_interval, cls.update)
                     cls.update_loop_running = True
 
     @classmethod
     def remove(cls, callback: Callable):
-        cls.callback_list.remove(callback)
+        try:
+            cls.callback_list.remove(callback)
+        except ValueError:
+            return
 
     @staticmethod
     def detect_appearance_mode() -> int:
